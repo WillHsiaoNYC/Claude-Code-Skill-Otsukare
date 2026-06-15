@@ -6,6 +6,8 @@
 
 > **🤖 Installing with an AI agent?** Paste this repo's URL into Claude Code (or any coding agent) and say **"install this skill by following the README."** The agent should follow [Install → With an AI agent](#install--with-an-ai-agent-recommended) below — it's written as a step-by-step procedure an agent can execute directly, including the one manual-ish step (wiring your statusline).
 
+> **📋 Subscription plans only.** otsukare guards Claude Code's **5-hour / 7-day rate-limit windows**, which exist on Pro/Max subscriptions. On an **API / usage-billed** setup (metered per token, no rolling windows) there's nothing to guard — the skill runs a `--preflight` check at startup, detects the absence of `rate_limits`, tells you, and exits cleanly.
+
 ---
 
 ## The problem
@@ -187,6 +189,7 @@ Defaults live at the top of `scripts/otsukare_usage.py`; override per-call via f
 
 ```bash
 otsukare_usage.py                     # decision for current usage
+otsukare_usage.py --preflight         # is this a subscription plan with 5h/7d limits? (vs API/usage-billed)
 otsukare_usage.py --wait-fresh        # block until the mirror is freshly rendered with a current 5h reset
 otsukare_usage.py --arm               # safety-net target for the 5h window (validate-or-fallback)
 otsukare_usage.py --resume-check N    # 'clear' / 'wait' against binding reset epoch N

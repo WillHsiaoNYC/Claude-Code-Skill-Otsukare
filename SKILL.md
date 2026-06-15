@@ -25,9 +25,16 @@ The helper already applies `SOFT`/`HARD`/`STALE_BUFFER`/`STALE_AGE`/`RESUME_OFFS
 
 **Do not dispatch `run_in_background` subagents during an otsukare run.** Background agents return control immediately and finish later, so you cannot block on them at a seam — their output could land after the checkpoint and be lost. Use **foreground/blocking** subagents only, so "let in-flight subagents finish" is actually enforceable. If a background agent is unavoidable, record its task ID in the checkpoint and reconcile it in resume mode.
 
-## At start (refresh, then arm the safety net)
+## At start (preflight, refresh, then arm the safety net)
 
-Before doing any work, set up the dead-man's switch so a sudden usage spike that hard-cuts the session still auto-resumes:
+**Step 0 — confirm otsukare even applies here.** It only guards subscription 5h/7d limits:
+```bash
+python3 ~/.claude/skills/otsukare/scripts/otsukare_usage.py --preflight
+```
+- `applicable: true` → continue.
+- `applicable: false` → **show the user the `message` verbatim and STOP** — do not arm, checkpoint, or wrap anything. Reasons: `no_rate_limits` = an API / usage-billed plan (metered per token, no rolling windows) — otsukare has nothing to guard; `no_mirror` = the statusline mirror isn't wired (see README); `stale` = the mirror isn't updating.
+
+Once applicable, set up the dead-man's switch so a sudden usage spike that hard-cuts the session still auto-resumes:
 
 1. **Block until usage is fresh** — do this FIRST. It is the guard against reading a stale reset/usage left by a previous session or window:
    ```bash

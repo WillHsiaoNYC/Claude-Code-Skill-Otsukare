@@ -173,6 +173,72 @@ def wait_fresh(path, timeout=30, poll=0.5, max_age=15,
         sleeper(poll)
 
 
+# --- Applicability preflight --------------------------------------------------
+# otsukare only does something on subscription plans, which expose 5h/7d
+# `rate_limits` in the statusline blob. API / usage-billed setups are metered
+# per token and have no such windows (no `rate_limits` object at all), so the
+# skill should detect that up front and tell the user rather than no-op.
+
+def _read_blob(path):
+    """Return (mtime, blob) or (0, None) if missing/unreadable."""
+    try:
+        return os.path.getmtime(path), load_blob(path)
+    except OSError:
+        return 0, None
+
+
+def classify(blob, mtime, now, max_age=15):
+    """Classify the environment from a (possibly stale) blob read:
+      'applicable'      -> subscription: rate_limits.five_hour.resets_at present
+      'no_rate_limits'  -> a FRESH blob with no rate limits -> API / usage-billed
+      'no_mirror'       -> no blob at all (statusline mirror not wired)
+      'stale'           -> old blob, can't yet decide; wait for a render
+    """
+    if blob is None:
+        return "no_mirror"
+    five = (blob.get("rate_limits") or {}).get("five_hour") or {}
+    if five.get("resets_at") is not None:
+        return "applicable"
+    if (now - mtime) <= max_age:
+        return "no_rate_limits"
+    return "stale"
+
+
+PREFLIGHT_MESSAGES = {
+    "applicable": "Subscription rate limits detected (5h/7d) — otsukare active.",
+    "no_rate_limits": (
+        "No 5h/7d rate-limit windows are present in the statusline data — this looks "
+        "like an API / usage-billed setup, which is metered per token rather than by "
+        "rolling windows. otsukare only guards subscription rate limits, so there is "
+        "nothing for it to do here. Skipping."),
+    "no_mirror": (
+        "The usage mirror file is missing — your statusline isn't exposing usage data. "
+        "See the README 'expose your limits to your local agent' setup. otsukare can't "
+        "run without it."),
+    "stale": (
+        "Couldn't get a fresh usage reading — the statusline mirror isn't updating. "
+        "Check the README setup; otsukare needs current usage data to run."),
+}
+
+
+def preflight(path, timeout=10, poll=0.5, max_age=15, clock=None, sleeper=None, reader=None):
+    """Wait briefly for a fresh render, then classify applicability so a
+    not-yet-rendered subscription session isn't mistaken for an API setup."""
+    clock = clock or time.time
+    sleeper = sleeper or time.sleep
+    reader = reader or _read_blob
+    start = clock()
+    while True:
+        now = clock()
+        mtime, blob = reader(path)
+        verdict = classify(blob, mtime, now, max_age)
+        if verdict in ("applicable", "no_rate_limits") or now - start >= timeout:
+            return {"applicable": verdict == "applicable", "reason": verdict,
+                    "message": PREFLIGHT_MESSAGES[verdict],
+                    "waited_seconds": round(now - start, 1)}
+        sleeper(poll)
+
+
 # --- Run-metrics state (continues / time / tokens / cost) ----------------------
 # All token and cost numbers are session-cumulative at the source, so the run
 # summary measures the DELTA over the otsukare-wrapped span: a baseline is taken
@@ -335,6 +401,8 @@ def _build_parser():
                    help="resume-clear check against this binding reset epoch")
     p.add_argument("--cron-for", type=int, default=None, metavar="EPOCH",
                    help="print the bounded retry-window cron string for this epoch")
+    p.add_argument("--preflight", action="store_true",
+                   help="classify applicability (subscription vs API / usage-billed)")
     p.add_argument("--wait-fresh", action="store_true",
                    help="block until the mirror file is freshly rendered with a current 5h reset")
     p.add_argument("--wait-timeout", type=int, default=30,
@@ -357,6 +425,9 @@ def main(argv=None):
     now = args.now if args.now is not None else int(time.time())
     if args.cron_for is not None:
         print(cron_for(args.cron_for))
+        return 0
+    if args.preflight:
+        print(json.dumps(preflight(args.file)))
         return 0
     if args.wait_fresh:
         print(json.dumps(wait_fresh(args.file, timeout=args.wait_timeout)))

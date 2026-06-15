@@ -302,6 +302,47 @@ class TestStateCli(unittest.TestCase):
         self.assertFalse(json.loads(res.stdout)["ok"])
 
 
+class TestClassify(unittest.TestCase):
+    def test_applicable_when_rate_limits_present(self):
+        blob = {"rate_limits": {"five_hour": {"used_percentage": 50, "resets_at": 9999}}}
+        self.assertEqual(ou.classify(blob, mtime=1000, now=1000), "applicable")
+
+    def test_no_rate_limits_when_fresh_blob_lacks_them(self):
+        blob = {"cost": {"total_cost_usd": 1.0}}  # API setup: no rate_limits
+        self.assertEqual(ou.classify(blob, mtime=1000, now=1000), "no_rate_limits")
+
+    def test_stale_when_old_blob_lacks_them(self):
+        blob = {"cost": {"total_cost_usd": 1.0}}
+        self.assertEqual(ou.classify(blob, mtime=100, now=1000), "stale")  # age 900 > 15
+
+    def test_no_mirror_when_blob_missing(self):
+        self.assertEqual(ou.classify(None, mtime=0, now=1000), "no_mirror")
+
+
+class TestPreflight(unittest.TestCase):
+    def test_applicable_subscription(self):
+        clock = _Clock(1000)
+        blob = {"rate_limits": {"five_hour": {"resets_at": 9999}}}
+        out = ou.preflight("x", clock=clock, sleeper=clock.advance, reader=lambda p: (1000, blob))
+        self.assertTrue(out["applicable"])
+        self.assertEqual(out["reason"], "applicable")
+
+    def test_api_setup_reported_not_applicable(self):
+        clock = _Clock(1000)
+        blob = {"cost": {"total_cost_usd": 5.0}}  # fresh, no rate_limits
+        out = ou.preflight("x", clock=clock, sleeper=clock.advance, reader=lambda p: (1000, blob))
+        self.assertFalse(out["applicable"])
+        self.assertEqual(out["reason"], "no_rate_limits")
+        self.assertIn("API", out["message"])
+
+    def test_missing_mirror_times_out_to_no_mirror(self):
+        clock = _Clock(1000)
+        out = ou.preflight("x", timeout=2, clock=clock, sleeper=clock.advance,
+                           reader=lambda p: (0, None))
+        self.assertFalse(out["applicable"])
+        self.assertEqual(out["reason"], "no_mirror")
+
+
 class _Clock:
     def __init__(self, start=0):
         self.t = start
