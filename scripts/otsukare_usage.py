@@ -421,6 +421,13 @@ def _build_parser():
 
 
 def main(argv=None):
+    # CLI output may include non-ASCII (the お疲れ summary header). On Windows a
+    # redirected/piped stdout defaults to the locale codec (e.g. cp1252) and would
+    # raise UnicodeEncodeError; force UTF-8 so captured output never crashes.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
     args = _build_parser().parse_args(argv)
     now = args.now if args.now is not None else int(time.time())
     if args.cron_for is not None:

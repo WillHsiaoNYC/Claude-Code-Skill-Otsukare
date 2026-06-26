@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import tempfile
 import time
 import unittest
@@ -135,8 +136,8 @@ class TestCli(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         script = os.path.join(here, "otsukare_usage.py")
         res = subprocess.run(
-            ["python3", script] + args,
-            capture_output=True, text=True,
+            [sys.executable, script] + args,
+            capture_output=True, text=True, encoding="utf-8",
         )
         return res
 
@@ -280,7 +281,7 @@ class TestStateCli(unittest.TestCase):
         import subprocess
         here = os.path.dirname(os.path.abspath(__file__))
         script = os.path.join(here, "otsukare_usage.py")
-        return subprocess.run(["python3", script] + args, capture_output=True, text=True)
+        return subprocess.run([sys.executable, script] + args, capture_output=True, text=True, encoding="utf-8")
 
     def test_init_then_summary(self):
         tpath = write_transcript([(100, 10, 0, 0)])
@@ -405,7 +406,7 @@ class TestWaitFreshCli(unittest.TestCase):
         import subprocess
         here = os.path.dirname(os.path.abspath(__file__))
         script = os.path.join(here, "otsukare_usage.py")
-        return subprocess.run(["python3", script] + args, capture_output=True, text=True)
+        return subprocess.run([sys.executable, script] + args, capture_output=True, text=True, encoding="utf-8")
 
     def test_fresh_file_returns_immediately(self):
         p = write_blob(five=40, five_reset=9_999_999_999)  # reset far in the future
