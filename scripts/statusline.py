@@ -14,11 +14,11 @@ def mirror_path(home=None):
 def write_mirror(raw, dest):
     """Atomically write the blob: tmp in the same dir, then os.replace (atomic on
     Windows and Unix). Swallow OSError so a transient lock never breaks rendering."""
-    d = os.path.dirname(dest)
-    if d:
-        os.makedirs(d, exist_ok=True)
     tmp = dest + ".tmp"
     try:
+        d = os.path.dirname(dest)
+        if d:
+            os.makedirs(d, exist_ok=True)
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(raw)
         os.replace(tmp, dest)
@@ -29,14 +29,21 @@ def write_mirror(raw, dest):
 def format_status(raw):
     try:
         d = json.loads(raw)
+        model = (d.get("model") or {}).get("display_name", "Claude")
+        five = ((d.get("rate_limits") or {}).get("five_hour") or {}).get("used_percentage", "?")
+        return "{} · 5h {}%".format(model, five)
     except Exception:
         return "Claude"
-    model = (d.get("model") or {}).get("display_name", "Claude")
-    five = ((d.get("rate_limits") or {}).get("five_hour") or {}).get("used_percentage", "?")
-    return "{} · 5h {}%".format(model, five)
 
 
 def main():
+    # The status line includes non-ASCII (the · separator). On a cp932/Shift-JIS
+    # console stdout defaults to the locale codec and would raise UnicodeEncodeError
+    # every render; force UTF-8 so rendering never crashes.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
     raw = sys.stdin.read()
     write_mirror(raw, mirror_path())
     sys.stdout.write(format_status(raw))

@@ -19,6 +19,10 @@ class TestStatusline(unittest.TestCase):
     def test_format_status_tolerates_garbage(self):
         self.assertEqual(sl.format_status("not json"), "Claude")
 
+    def test_format_status_tolerates_nonobject_json(self):
+        # valid JSON that isn't an object (no .get) must still degrade to "Claude"
+        self.assertEqual(sl.format_status("42"), "Claude")
+
 
 if __name__ == "__main__":
     unittest.main()
