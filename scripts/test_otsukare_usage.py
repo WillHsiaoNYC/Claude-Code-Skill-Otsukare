@@ -437,5 +437,25 @@ class TestExpandUserPath(unittest.TestCase):
         self.assertIsNone(ou.expand_user_path(None))
 
 
+class TestResolvePaths(unittest.TestCase):
+    def test_emits_absolute_paths_under_home(self):
+        home = os.path.join(tempfile.gettempdir(), "fakehome")
+        out = ou.resolve_paths("sess9", home=home)
+        sd = os.path.join(home, ".claude", "otsukare")
+        self.assertEqual(out["state_dir"], sd)
+        self.assertEqual(out["heartbeat"], os.path.join(sd, "sess9.heartbeat"))
+        self.assertEqual(out["state"], os.path.join(sd, "sess9.state.json"))
+        self.assertEqual(out["mirror"],
+                         os.path.join(home, ".claude", "last-statusline-input.json"))
+        self.assertNotIn("checkpoint", out)  # no slug given
+
+    def test_includes_checkpoint_when_slug_given(self):
+        home = os.path.join(tempfile.gettempdir(), "fakehome")
+        out = ou.resolve_paths("sess9", home=home, task_slug="refactor-auth")
+        self.assertEqual(out["checkpoint"],
+                         os.path.join(home, ".claude", "otsukare",
+                                      "sess9-refactor-auth.md"))
+
+
 if __name__ == "__main__":
     unittest.main()

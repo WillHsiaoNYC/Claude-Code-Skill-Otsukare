@@ -34,6 +34,26 @@ def expand_user_path(p):
     return os.path.expanduser(p) if p else p
 
 
+def resolve_paths(session_id, home=None, task_slug=None):
+    """Absolute, OS-correct paths for the otsukare state files. The agent reads
+    these once at preflight so it never constructs a ~/... path (Write/Read/Cron
+    tools all require absolute paths)."""
+    home = home or os.path.expanduser("~")
+    claude = os.path.join(home, ".claude")
+    state_dir = os.path.join(claude, "otsukare")
+    out = {
+        "home": home,
+        "state_dir": state_dir,
+        "heartbeat": os.path.join(state_dir, session_id + ".heartbeat"),
+        "state": os.path.join(state_dir, session_id + ".state.json"),
+        "mirror": os.path.join(claude, "last-statusline-input.json"),
+    }
+    if task_slug:
+        out["checkpoint"] = os.path.join(state_dir,
+                                         "{}-{}.md".format(session_id, task_slug))
+    return out
+
+
 def _limit(blob, key):
     rl = (blob.get("rate_limits") or {}).get(key) or {}
     return rl.get("used_percentage"), rl.get("resets_at")
@@ -414,6 +434,10 @@ def _build_parser():
                    help="block until the mirror file is freshly rendered with a current 5h reset")
     p.add_argument("--wait-timeout", type=int, default=30,
                    help="max seconds to wait for --wait-fresh")
+    p.add_argument("--resolve-paths", action="store_true",
+                   help="print absolute otsukare state paths for --session-id")
+    p.add_argument("--session-id", default=None, help="session id (for --resolve-paths)")
+    p.add_argument("--task-slug", default=None, help="task slug (for --resolve-paths)")
     p.add_argument("--state", default=None, help="path to the otsukare run-state JSON")
     p.add_argument("--state-action", choices=["init", "pause", "resume", "summary"],
                    default=None, help="run-metrics lifecycle action on the state file")
@@ -441,6 +465,12 @@ def main(argv=None):
     args.file = expand_user_path(args.file)
     args.state = expand_user_path(args.state)
     now = args.now if args.now is not None else int(time.time())
+    if args.resolve_paths:
+        if not args.session_id:
+            print(json.dumps({"ok": False, "error": "--resolve-paths requires --session-id"}))
+            return 2
+        print(json.dumps(resolve_paths(args.session_id, task_slug=args.task_slug)))
+        return 0
     if args.cron_for is not None:
         print(cron_for(args.cron_for))
         return 0
