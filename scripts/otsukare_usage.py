@@ -66,6 +66,16 @@ def touch_heartbeat(path):
     os.utime(path, None)
 
 
+def heartbeat_status(path, now, stale_min=15):
+    """Liveness from the heartbeat's mtime: alive if younger than stale_min.
+    Missing/unreadable -> dead with age_seconds=None (JSON-safe, no inf)."""
+    try:
+        age = now - os.path.getmtime(path)
+    except OSError:
+        return {"age_seconds": None, "alive": False, "missing": True}
+    return {"age_seconds": round(age, 1), "alive": age < stale_min * 60}
+
+
 def _limit(blob, key):
     rl = (blob.get("rate_limits") or {}).get(key) or {}
     return rl.get("used_percentage"), rl.get("resets_at")
@@ -452,6 +462,10 @@ def _build_parser():
     p.add_argument("--task-slug", default=None, help="task slug (for --resolve-paths)")
     p.add_argument("--touch-heartbeat", default=None, metavar="PATH",
                    help="create/bump the heartbeat file at PATH")
+    p.add_argument("--heartbeat", default=None, metavar="PATH",
+                   help="report alive/age for the heartbeat at PATH")
+    p.add_argument("--heartbeat-stale-min", type=int, default=15,
+                   help="minutes before a heartbeat is considered dead")
     p.add_argument("--state", default=None, help="path to the otsukare run-state JSON")
     p.add_argument("--state-action", choices=["init", "pause", "resume", "summary"],
                    default=None, help="run-metrics lifecycle action on the state file")
@@ -479,6 +493,7 @@ def main(argv=None):
     args.file = expand_user_path(args.file)
     args.state = expand_user_path(args.state)
     args.touch_heartbeat = expand_user_path(args.touch_heartbeat)
+    args.heartbeat = expand_user_path(args.heartbeat)
     now = args.now if args.now is not None else int(time.time())
     if args.resolve_paths:
         if not args.session_id:
@@ -498,6 +513,9 @@ def main(argv=None):
         return 0
     if args.wait_fresh:
         print(json.dumps(wait_fresh(args.file, timeout=args.wait_timeout)))
+        return 0
+    if args.heartbeat is not None:
+        print(json.dumps(heartbeat_status(args.heartbeat, now, args.heartbeat_stale_min)))
         return 0
     if args.state_action is not None:
         if not args.state:

@@ -473,5 +473,25 @@ class TestTouchHeartbeat(unittest.TestCase):
         self.assertGreater(os.path.getmtime(hb), old)
 
 
+class TestHeartbeatStatus(unittest.TestCase):
+    def test_alive_when_recent(self):
+        fd, hb = tempfile.mkstemp(); os.close(fd)
+        os.utime(hb, (1000, 1000))
+        out = ou.heartbeat_status(hb, now=1100, stale_min=15)   # 100s old
+        self.assertTrue(out["alive"])
+        self.assertEqual(out["age_seconds"], 100)
+
+    def test_dead_when_old(self):
+        fd, hb = tempfile.mkstemp(); os.close(fd)
+        os.utime(hb, (1000, 1000))
+        out = ou.heartbeat_status(hb, now=1000 + 16 * 60, stale_min=15)
+        self.assertFalse(out["alive"])
+
+    def test_missing_is_dead(self):
+        out = ou.heartbeat_status("/no/such.heartbeat", now=1000, stale_min=15)
+        self.assertFalse(out["alive"])
+        self.assertIsNone(out["age_seconds"])
+
+
 if __name__ == "__main__":
     unittest.main()
