@@ -27,6 +27,13 @@ def load_blob(path):
         return json.load(f)
 
 
+def expand_user_path(p):
+    """Expand a leading ~ in a path arg. PowerShell does not expand ~ for
+    native-exe arguments, so the helper must do it itself. No-op on None and
+    on already-absolute paths."""
+    return os.path.expanduser(p) if p else p
+
+
 def _limit(blob, key):
     rl = (blob.get("rate_limits") or {}).get(key) or {}
     return rl.get("used_percentage"), rl.get("resets_at")
@@ -429,6 +436,10 @@ def main(argv=None):
     except (AttributeError, ValueError):
         pass
     args = _build_parser().parse_args(argv)
+    # PowerShell does not expand a leading ~ in native-exe args, so normalize
+    # every path-valued arg here, before any dispatch reads it.
+    args.file = expand_user_path(args.file)
+    args.state = expand_user_path(args.state)
     now = args.now if args.now is not None else int(time.time())
     if args.cron_for is not None:
         print(cron_for(args.cron_for))

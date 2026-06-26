@@ -421,5 +421,21 @@ class TestWaitFreshCli(unittest.TestCase):
         self.assertTrue(json.loads(res.stdout)["timed_out"])
 
 
+class TestExpandUserPath(unittest.TestCase):
+    def test_expands_leading_tilde(self):
+        out = ou.expand_user_path("~/x/y.json")
+        self.assertFalse(out.startswith("~"))
+        # expanduser preserves the input's forward slashes in the tail, so assert
+        # with a literal "/" — os.path.join would emit "\" on Windows and fail.
+        self.assertTrue(out.endswith("x/y.json"))
+
+    def test_absolute_path_unchanged(self):
+        p = os.path.join(tempfile.gettempdir(), "abs.json")
+        self.assertEqual(ou.expand_user_path(p), p)
+
+    def test_none_passthrough(self):
+        self.assertIsNone(ou.expand_user_path(None))
+
+
 if __name__ == "__main__":
     unittest.main()
