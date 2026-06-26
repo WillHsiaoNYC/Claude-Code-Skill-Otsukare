@@ -54,6 +54,18 @@ def resolve_paths(session_id, home=None, task_slug=None):
     return out
 
 
+def touch_heartbeat(path):
+    """Create the heartbeat (and its parent dir) if missing, and bump its mtime.
+    os.utime is required: on Windows opening a file in append mode does NOT
+    advance mtime, which would defeat the mtime-based liveness check."""
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(path, "a"):
+        pass
+    os.utime(path, None)
+
+
 def _limit(blob, key):
     rl = (blob.get("rate_limits") or {}).get(key) or {}
     return rl.get("used_percentage"), rl.get("resets_at")
@@ -438,6 +450,8 @@ def _build_parser():
                    help="print absolute otsukare state paths for --session-id")
     p.add_argument("--session-id", default=None, help="session id (for --resolve-paths)")
     p.add_argument("--task-slug", default=None, help="task slug (for --resolve-paths)")
+    p.add_argument("--touch-heartbeat", default=None, metavar="PATH",
+                   help="create/bump the heartbeat file at PATH")
     p.add_argument("--state", default=None, help="path to the otsukare run-state JSON")
     p.add_argument("--state-action", choices=["init", "pause", "resume", "summary"],
                    default=None, help="run-metrics lifecycle action on the state file")
@@ -464,12 +478,17 @@ def main(argv=None):
     # every path-valued arg here, before any dispatch reads it.
     args.file = expand_user_path(args.file)
     args.state = expand_user_path(args.state)
+    args.touch_heartbeat = expand_user_path(args.touch_heartbeat)
     now = args.now if args.now is not None else int(time.time())
     if args.resolve_paths:
         if not args.session_id:
             print(json.dumps({"ok": False, "error": "--resolve-paths requires --session-id"}))
             return 2
         print(json.dumps(resolve_paths(args.session_id, task_slug=args.task_slug)))
+        return 0
+    if args.touch_heartbeat:
+        touch_heartbeat(args.touch_heartbeat)
+        print(json.dumps({"ok": True, "heartbeat": args.touch_heartbeat}))
         return 0
     if args.cron_for is not None:
         print(cron_for(args.cron_for))

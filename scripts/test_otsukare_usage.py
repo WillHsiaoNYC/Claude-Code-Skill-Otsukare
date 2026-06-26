@@ -457,5 +457,21 @@ class TestResolvePaths(unittest.TestCase):
                                       "sess9-refactor-auth.md"))
 
 
+class TestTouchHeartbeat(unittest.TestCase):
+    def test_creates_file_and_parent(self):
+        d = tempfile.mkdtemp()
+        hb = os.path.join(d, "otsukare", "s1.heartbeat")
+        ou.touch_heartbeat(hb)
+        self.assertTrue(os.path.exists(hb))
+
+    def test_bumps_mtime_on_existing_file(self):
+        fd, hb = tempfile.mkstemp(suffix=".heartbeat")
+        os.close(fd)
+        old = os.path.getmtime(hb) - 10_000      # force a known-old mtime
+        os.utime(hb, (old, old))
+        ou.touch_heartbeat(hb)
+        self.assertGreater(os.path.getmtime(hb), old)
+
+
 if __name__ == "__main__":
     unittest.main()
