@@ -493,5 +493,22 @@ class TestHeartbeatStatus(unittest.TestCase):
         self.assertIsNone(out["age_seconds"])
 
 
+class TestCleanup(unittest.TestCase):
+    def test_removes_existing_and_is_idempotent(self):
+        fd1, a = tempfile.mkstemp(); os.close(fd1)
+        fd2, b = tempfile.mkstemp(); os.close(fd2)
+        out = ou.cleanup([a, b])
+        self.assertFalse(os.path.exists(a))
+        self.assertFalse(os.path.exists(b))
+        self.assertEqual(sorted(out["removed"]), sorted([a, b]))
+        # second call must not raise
+        out2 = ou.cleanup([a, b])
+        self.assertEqual(out2["removed"], [])
+
+    def test_ignores_none_entries(self):
+        out = ou.cleanup([None, ""])
+        self.assertTrue(out["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()

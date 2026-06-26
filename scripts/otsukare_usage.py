@@ -76,6 +76,21 @@ def heartbeat_status(path, now, stale_min=15):
     return {"age_seconds": round(age, 1), "alive": age < stale_min * 60}
 
 
+def cleanup(paths):
+    """Remove each path, ignoring missing/locked files (Windows raises
+    FileNotFoundError / PermissionError). Never raises, so completion can't crash."""
+    removed = []
+    for p in paths:
+        if not p:
+            continue
+        try:
+            os.remove(p)
+            removed.append(p)
+        except OSError:
+            pass
+    return {"ok": True, "removed": removed}
+
+
 def _limit(blob, key):
     rl = (blob.get("rate_limits") or {}).get(key) or {}
     return rl.get("used_percentage"), rl.get("resets_at")
@@ -466,6 +481,8 @@ def _build_parser():
                    help="report alive/age for the heartbeat at PATH")
     p.add_argument("--heartbeat-stale-min", type=int, default=15,
                    help="minutes before a heartbeat is considered dead")
+    p.add_argument("--cleanup", action="store_true",
+                   help="remove the heartbeat (--heartbeat) and state (--state) files")
     p.add_argument("--state", default=None, help="path to the otsukare run-state JSON")
     p.add_argument("--state-action", choices=["init", "pause", "resume", "summary"],
                    default=None, help="run-metrics lifecycle action on the state file")
@@ -513,6 +530,9 @@ def main(argv=None):
         return 0
     if args.wait_fresh:
         print(json.dumps(wait_fresh(args.file, timeout=args.wait_timeout)))
+        return 0
+    if args.cleanup:
+        print(json.dumps(cleanup([args.heartbeat, args.state])))
         return 0
     if args.heartbeat is not None:
         print(json.dumps(heartbeat_status(args.heartbeat, now, args.heartbeat_stale_min)))
