@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -7,6 +9,16 @@ import unittest
 import otsukare_usage as ou
 
 CFG = dict(soft=90, hard=97, stale_buffer=8, stale_age=120, resume_offset_min=10)
+
+_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "otsukare_usage.py")
+
+
+def run_cli(args):
+    """Run otsukare_usage.py as a subprocess under the current interpreter. Shared
+    by every CLI test class — sys.executable (not python3, for Windows) and
+    encoding='utf-8' so captured non-ASCII output decodes on any OS."""
+    return subprocess.run([sys.executable, _SCRIPT] + args,
+                          capture_output=True, text=True, encoding="utf-8")
 
 
 def write_blob(five=None, five_reset=None, seven=None, seven_reset=None):
@@ -130,26 +142,16 @@ class TestCronFor(unittest.TestCase):
 
 
 class TestCli(unittest.TestCase):
-    def _run(self, args):
-        import subprocess
-        here = os.path.dirname(os.path.abspath(__file__))
-        script = os.path.join(here, "otsukare_usage.py")
-        res = subprocess.run(
-            ["python3", script] + args,
-            capture_output=True, text=True,
-        )
-        return res
-
     def test_default_mode_emits_decision_json(self):
         p = write_blob(five=92, five_reset=1000, seven=5, seven_reset=9000)
-        res = self._run(["--file", p, "--now", "500", "--mtime", "490"])
+        res = run_cli(["--file", p, "--now", "500", "--mtime", "490"])
         self.assertEqual(res.returncode, 0, res.stderr)
         out = json.loads(res.stdout)
         self.assertEqual(out["decision"], "soft")
 
     def test_arm_mode(self):
         p = write_blob(five=40, five_reset=10_000)
-        res = self._run(["--file", p, "--now", "5000", "--mtime", "4990", "--arm"])
+        res = run_cli(["--file", p, "--now", "5000", "--mtime", "4990", "--arm"])
         self.assertEqual(res.returncode, 0, res.stderr)
         out = json.loads(res.stdout)
         self.assertEqual(out["safety_target"], 10_000 + 600)
@@ -157,20 +159,20 @@ class TestCli(unittest.TestCase):
 
     def test_resume_check_mode(self):
         p = write_blob(five=10, five_reset=1000, seven=4, seven_reset=1000)
-        res = self._run(["--file", p, "--now", "2000", "--mtime", "1500",
+        res = run_cli(["--file", p, "--now", "2000", "--mtime", "1500",
                          "--resume-check", "1000"])
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(json.loads(res.stdout)["status"], "clear")
 
     def test_cron_for_mode(self):
-        res = self._run(["--cron-for", "1700000000"])
+        res = run_cli(["--cron-for", "1700000000"])
         self.assertEqual(res.returncode, 0, res.stderr)
         t = time.localtime(1_700_000_000)
         self.assertEqual(res.stdout.strip(),
                          "*/5 {} {} {} *".format(t.tm_hour, t.tm_mday, t.tm_mon))
 
     def test_missing_file_exits_nonzero(self):
-        res = self._run(["--file", "/no/such/file.json", "--now", "1", "--mtime", "1"])
+        res = run_cli(["--file", "/no/such/file.json", "--now", "1", "--mtime", "1"])
         self.assertEqual(res.returncode, 2)
         self.assertFalse(json.loads(res.stdout)["ok"])
 
@@ -276,28 +278,22 @@ class TestFormatSummary(unittest.TestCase):
 
 
 class TestStateCli(unittest.TestCase):
-    def _run(self, args):
-        import subprocess
-        here = os.path.dirname(os.path.abspath(__file__))
-        script = os.path.join(here, "otsukare_usage.py")
-        return subprocess.run(["python3", script] + args, capture_output=True, text=True)
-
     def test_init_then_summary(self):
         tpath = write_transcript([(100, 10, 0, 0)])
         blob = write_cost_blob(1.00, tpath)
         fd, spath = tempfile.mkstemp(suffix=".json")
         os.close(fd)
-        init = self._run(["--file", blob, "--state", spath, "--state-action", "init",
+        init = run_cli(["--file", blob, "--state", spath, "--state-action", "init",
                           "--task", "demo", "--now", "1000"])
         self.assertEqual(init.returncode, 0, init.stderr)
         self.assertTrue(json.loads(init.stdout)["ok"])
-        summ = self._run(["--file", blob, "--state", spath, "--state-action", "summary",
+        summ = run_cli(["--file", blob, "--state", spath, "--state-action", "summary",
                           "--now", "2000"])
         self.assertEqual(summ.returncode, 0, summ.stderr)
         self.assertIn("otsukare summary — demo", summ.stdout)
 
     def test_state_action_requires_state(self):
-        res = self._run(["--state-action", "summary"])
+        res = run_cli(["--state-action", "summary"])
         self.assertEqual(res.returncode, 2)
         self.assertFalse(json.loads(res.stdout)["ok"])
 
@@ -401,23 +397,159 @@ class TestWaitFresh(unittest.TestCase):
 
 
 class TestWaitFreshCli(unittest.TestCase):
-    def _run(self, args):
-        import subprocess
-        here = os.path.dirname(os.path.abspath(__file__))
-        script = os.path.join(here, "otsukare_usage.py")
-        return subprocess.run(["python3", script] + args, capture_output=True, text=True)
-
     def test_fresh_file_returns_immediately(self):
         p = write_blob(five=40, five_reset=9_999_999_999)  # reset far in the future
-        res = self._run(["--file", p, "--wait-fresh", "--wait-timeout", "3"])
+        res = run_cli(["--file", p, "--wait-fresh", "--wait-timeout", "3"])
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertTrue(json.loads(res.stdout)["fresh"])
 
     def test_expired_window_times_out(self):
         p = write_blob(five=40, five_reset=1000)  # reset in the past
-        res = self._run(["--file", p, "--wait-fresh", "--wait-timeout", "1"])
+        res = run_cli(["--file", p, "--wait-fresh", "--wait-timeout", "1"])
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertTrue(json.loads(res.stdout)["timed_out"])
+
+
+class TestExpandUserPath(unittest.TestCase):
+    def test_expands_leading_tilde(self):
+        out = ou.expand_user_path("~/x/y.json")
+        self.assertFalse(out.startswith("~"))
+        # expanduser preserves the input's forward slashes in the tail, so assert
+        # with a literal "/" — os.path.join would emit "\" on Windows and fail.
+        self.assertTrue(out.endswith("x/y.json"))
+
+    def test_absolute_path_unchanged(self):
+        p = os.path.join(tempfile.gettempdir(), "abs.json")
+        self.assertEqual(ou.expand_user_path(p), p)
+
+    def test_none_passthrough(self):
+        self.assertIsNone(ou.expand_user_path(None))
+
+
+class TestResolvePaths(unittest.TestCase):
+    def test_emits_absolute_paths_under_home(self):
+        home = os.path.join(tempfile.gettempdir(), "fakehome")
+        out = ou.resolve_paths("sess9", home=home)
+        sd = os.path.join(home, ".claude", "otsukare")
+        self.assertEqual(out["state_dir"], sd)
+        self.assertEqual(out["heartbeat"], os.path.join(sd, "sess9.heartbeat"))
+        self.assertEqual(out["state"], os.path.join(sd, "sess9.state.json"))
+        self.assertEqual(out["mirror"],
+                         os.path.join(home, ".claude", "last-statusline-input.json"))
+        self.assertNotIn("checkpoint", out)  # no slug given
+
+    def test_includes_checkpoint_when_slug_given(self):
+        home = os.path.join(tempfile.gettempdir(), "fakehome")
+        out = ou.resolve_paths("sess9", home=home, task_slug="refactor-auth")
+        self.assertEqual(out["checkpoint"],
+                         os.path.join(home, ".claude", "otsukare",
+                                      "sess9-refactor-auth.md"))
+
+
+class TestTouchHeartbeat(unittest.TestCase):
+    def test_creates_file_and_parent(self):
+        d = tempfile.mkdtemp()
+        hb = os.path.join(d, "otsukare", "s1.heartbeat")
+        ou.touch_heartbeat(hb)
+        self.assertTrue(os.path.exists(hb))
+
+    def test_bumps_mtime_on_existing_file(self):
+        fd, hb = tempfile.mkstemp(suffix=".heartbeat")
+        os.close(fd)
+        old = os.path.getmtime(hb) - 10_000      # force a known-old mtime
+        os.utime(hb, (old, old))
+        ou.touch_heartbeat(hb)
+        self.assertGreater(os.path.getmtime(hb), old)
+
+
+class TestHeartbeatStatus(unittest.TestCase):
+    def test_alive_when_recent(self):
+        fd, hb = tempfile.mkstemp(); os.close(fd)
+        os.utime(hb, (1000, 1000))
+        out = ou.heartbeat_status(hb, now=1100, stale_min=15)   # 100s old
+        self.assertTrue(out["alive"])
+        self.assertEqual(out["age_seconds"], 100)
+
+    def test_dead_when_old(self):
+        fd, hb = tempfile.mkstemp(); os.close(fd)
+        os.utime(hb, (1000, 1000))
+        out = ou.heartbeat_status(hb, now=1000 + 16 * 60, stale_min=15)
+        self.assertFalse(out["alive"])
+
+    def test_missing_is_dead(self):
+        out = ou.heartbeat_status("/no/such.heartbeat", now=1000, stale_min=15)
+        self.assertFalse(out["alive"])
+        self.assertIsNone(out["age_seconds"])
+
+    def test_age_clamped_to_zero_when_now_before_mtime(self):
+        # now=int(time.time()) truncation can land just below the float mtime of
+        # a freshly-touched file; age_seconds must never report negative.
+        fd, hb = tempfile.mkstemp(); os.close(fd)
+        os.utime(hb, (1000, 1000))
+        out = ou.heartbeat_status(hb, now=995, stale_min=15)  # now < mtime
+        self.assertEqual(out["age_seconds"], 0.0)
+        self.assertTrue(out["alive"])
+
+
+class TestCleanup(unittest.TestCase):
+    def test_removes_existing_and_is_idempotent(self):
+        fd1, a = tempfile.mkstemp(); os.close(fd1)
+        fd2, b = tempfile.mkstemp(); os.close(fd2)
+        out = ou.cleanup([a, b])
+        self.assertFalse(os.path.exists(a))
+        self.assertFalse(os.path.exists(b))
+        self.assertEqual(sorted(out["removed"]), sorted([a, b]))
+        # second call must not raise
+        out2 = ou.cleanup([a, b])
+        self.assertEqual(out2["removed"], [])
+
+    def test_ignores_none_entries(self):
+        out = ou.cleanup([None, ""])
+        self.assertTrue(out["ok"])
+
+
+class TestPathsCli(unittest.TestCase):
+    """Subprocess tests for the path/heartbeat subcommands. The file's convention
+    is that every CLI mode gets one; these also pin the load-bearing
+    --cleanup-before---heartbeat dispatch ordering."""
+
+    def test_resolve_paths_emits_absolute_paths(self):
+        res = run_cli(["--resolve-paths", "--session-id", "s1"])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = json.loads(res.stdout)
+        for key in ("heartbeat", "state", "mirror"):
+            self.assertTrue(os.path.isabs(out[key]), out[key])
+
+    def test_resolve_paths_without_session_id_errors(self):
+        res = run_cli(["--resolve-paths"])
+        self.assertEqual(res.returncode, 2)
+        self.assertFalse(json.loads(res.stdout)["ok"])
+
+    def test_touch_heartbeat_creates_file(self):
+        hb = os.path.join(tempfile.mkdtemp(), "s1.heartbeat")
+        res = run_cli(["--touch-heartbeat", hb])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(json.loads(res.stdout)["ok"])
+        self.assertTrue(os.path.exists(hb))
+
+    def test_heartbeat_reports_alive_for_fresh_file(self):
+        hb = os.path.join(tempfile.mkdtemp(), "s1.heartbeat")
+        run_cli(["--touch-heartbeat", hb])               # create it first
+        res = run_cli(["--heartbeat", hb])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(json.loads(res.stdout)["alive"])
+
+    def test_cleanup_takes_precedence_over_heartbeat_status(self):
+        # --cleanup and --heartbeat share the heartbeat path arg; dispatch order
+        # must route to cleanup (remove files), not heartbeat-status (read mtime).
+        fd1, hb = tempfile.mkstemp(suffix=".heartbeat"); os.close(fd1)
+        fd2, st = tempfile.mkstemp(suffix=".state.json"); os.close(fd2)
+        res = run_cli(["--cleanup", "--heartbeat", hb, "--state", st])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = json.loads(res.stdout)
+        self.assertEqual(sorted(out["removed"]), sorted([hb, st]))
+        self.assertFalse(os.path.exists(hb))
+        self.assertFalse(os.path.exists(st))
 
 
 if __name__ == "__main__":

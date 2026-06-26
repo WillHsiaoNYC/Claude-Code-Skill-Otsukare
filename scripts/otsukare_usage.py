@@ -27,6 +27,72 @@ def load_blob(path):
         return json.load(f)
 
 
+def expand_user_path(p):
+    """Expand a leading ~ in a path arg. PowerShell does not expand ~ for
+    native-exe arguments, so the helper must do it itself. No-op on None and
+    on already-absolute paths."""
+    return os.path.expanduser(p) if p else p
+
+
+def resolve_paths(session_id, home=None, task_slug=None):
+    """Absolute, OS-correct paths for the otsukare state files. The agent reads
+    these once at preflight so it never constructs a ~/... path (Write/Read/Cron
+    tools all require absolute paths)."""
+    home = home or os.path.expanduser("~")
+    claude = os.path.join(home, ".claude")
+    state_dir = os.path.join(claude, "otsukare")
+    out = {
+        "home": home,
+        "state_dir": state_dir,
+        "heartbeat": os.path.join(state_dir, session_id + ".heartbeat"),
+        "state": os.path.join(state_dir, session_id + ".state.json"),
+        "mirror": os.path.join(claude, "last-statusline-input.json"),
+    }
+    if task_slug:
+        out["checkpoint"] = os.path.join(state_dir,
+                                         "{}-{}.md".format(session_id, task_slug))
+    return out
+
+
+def touch_heartbeat(path):
+    """Create the heartbeat (and its parent dir) if missing, and bump its mtime.
+    os.utime is required: on Windows opening a file in append mode does NOT
+    advance mtime, which would defeat the mtime-based liveness check."""
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(path, "a"):
+        pass
+    os.utime(path, None)
+
+
+def heartbeat_status(path, now, stale_min=15):
+    """Liveness from the heartbeat's mtime: alive if younger than stale_min.
+    Missing/unreadable -> dead with age_seconds=None (JSON-safe, no inf)."""
+    try:
+        # Clamp at 0: now=int(time.time()) truncates below a just-written float
+        # mtime, which would otherwise report a slightly negative age.
+        age = max(0.0, now - os.path.getmtime(path))
+    except OSError:
+        return {"age_seconds": None, "alive": False, "missing": True}
+    return {"age_seconds": round(age, 1), "alive": age < stale_min * 60}
+
+
+def cleanup(paths):
+    """Remove each path, ignoring missing/locked files (Windows raises
+    FileNotFoundError / PermissionError). Never raises, so completion can't crash."""
+    removed = []
+    for p in paths:
+        if not p:
+            continue
+        try:
+            os.remove(p)
+            removed.append(p)
+        except OSError:
+            pass
+    return {"ok": True, "removed": removed}
+
+
 def _limit(blob, key):
     rl = (blob.get("rate_limits") or {}).get(key) or {}
     return rl.get("used_percentage"), rl.get("resets_at")
@@ -391,7 +457,9 @@ def format_summary(s):
 
 def _build_parser():
     p = argparse.ArgumentParser(description="otsukare usage-decision helper")
-    p.add_argument("--file",
+    # Path args use type=expand_user_path so a leading ~ (which PowerShell does not
+    # expand for a native exe) is resolved at parse time, co-located with each arg.
+    p.add_argument("--file", type=expand_user_path,
                    default=os.path.expanduser("~/.claude/last-statusline-input.json"))
     p.add_argument("--now", type=int, default=None, help="override current epoch (testing)")
     p.add_argument("--mtime", type=int, default=None, help="override file mtime (testing)")
@@ -407,7 +475,20 @@ def _build_parser():
                    help="block until the mirror file is freshly rendered with a current 5h reset")
     p.add_argument("--wait-timeout", type=int, default=30,
                    help="max seconds to wait for --wait-fresh")
-    p.add_argument("--state", default=None, help="path to the otsukare run-state JSON")
+    p.add_argument("--resolve-paths", action="store_true",
+                   help="print absolute otsukare state paths for --session-id")
+    p.add_argument("--session-id", default=None, help="session id (for --resolve-paths)")
+    p.add_argument("--task-slug", default=None, help="task slug (for --resolve-paths)")
+    p.add_argument("--touch-heartbeat", type=expand_user_path, default=None, metavar="PATH",
+                   help="create/bump the heartbeat file at PATH")
+    p.add_argument("--heartbeat", type=expand_user_path, default=None, metavar="PATH",
+                   help="report alive/age for the heartbeat at PATH")
+    p.add_argument("--heartbeat-stale-min", type=int, default=15,
+                   help="minutes before a heartbeat is considered dead")
+    p.add_argument("--cleanup", action="store_true",
+                   help="remove the heartbeat (--heartbeat) and state (--state) files")
+    p.add_argument("--state", type=expand_user_path, default=None,
+                   help="path to the otsukare run-state JSON")
     p.add_argument("--state-action", choices=["init", "pause", "resume", "summary"],
                    default=None, help="run-metrics lifecycle action on the state file")
     p.add_argument("--task", default="", help="task name (for --state-action init)")
@@ -421,8 +502,25 @@ def _build_parser():
 
 
 def main(argv=None):
+    # CLI output may include non-ASCII (the お疲れ summary header). On Windows a
+    # redirected/piped stdout defaults to the locale codec (e.g. cp1252) and would
+    # raise UnicodeEncodeError; force UTF-8 so captured output never crashes.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
     args = _build_parser().parse_args(argv)
     now = args.now if args.now is not None else int(time.time())
+    if args.resolve_paths:
+        if not args.session_id:
+            print(json.dumps({"ok": False, "error": "--resolve-paths requires --session-id"}))
+            return 2
+        print(json.dumps(resolve_paths(args.session_id, task_slug=args.task_slug)))
+        return 0
+    if args.touch_heartbeat:
+        touch_heartbeat(args.touch_heartbeat)
+        print(json.dumps({"ok": True, "heartbeat": args.touch_heartbeat}))
+        return 0
     if args.cron_for is not None:
         print(cron_for(args.cron_for))
         return 0
@@ -431,6 +529,12 @@ def main(argv=None):
         return 0
     if args.wait_fresh:
         print(json.dumps(wait_fresh(args.file, timeout=args.wait_timeout)))
+        return 0
+    if args.cleanup:
+        print(json.dumps(cleanup([args.heartbeat, args.state])))
+        return 0
+    if args.heartbeat is not None:
+        print(json.dumps(heartbeat_status(args.heartbeat, now, args.heartbeat_stale_min)))
         return 0
     if args.state_action is not None:
         if not args.state:

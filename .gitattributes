@@ -1,0 +1,4 @@
+# Shell + Python scripts must stay LF so they run on every OS,
+# regardless of the cloner's core.autocrlf setting.
+*.sh text eol=lf
+*.py text eol=lf
