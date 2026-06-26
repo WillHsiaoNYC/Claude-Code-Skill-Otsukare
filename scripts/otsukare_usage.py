@@ -70,7 +70,9 @@ def heartbeat_status(path, now, stale_min=15):
     """Liveness from the heartbeat's mtime: alive if younger than stale_min.
     Missing/unreadable -> dead with age_seconds=None (JSON-safe, no inf)."""
     try:
-        age = now - os.path.getmtime(path)
+        # Clamp at 0: now=int(time.time()) truncates below a just-written float
+        # mtime, which would otherwise report a slightly negative age.
+        age = max(0.0, now - os.path.getmtime(path))
     except OSError:
         return {"age_seconds": None, "alive": False, "missing": True}
     return {"age_seconds": round(age, 1), "alive": age < stale_min * 60}

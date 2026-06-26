@@ -492,6 +492,15 @@ class TestHeartbeatStatus(unittest.TestCase):
         self.assertFalse(out["alive"])
         self.assertIsNone(out["age_seconds"])
 
+    def test_age_clamped_to_zero_when_now_before_mtime(self):
+        # now=int(time.time()) truncation can land just below the float mtime of
+        # a freshly-touched file; age_seconds must never report negative.
+        fd, hb = tempfile.mkstemp(); os.close(fd)
+        os.utime(hb, (1000, 1000))
+        out = ou.heartbeat_status(hb, now=995, stale_min=15)  # now < mtime
+        self.assertEqual(out["age_seconds"], 0.0)
+        self.assertTrue(out["alive"])
+
 
 class TestCleanup(unittest.TestCase):
     def test_removes_existing_and_is_idempotent(self):
@@ -508,6 +517,57 @@ class TestCleanup(unittest.TestCase):
     def test_ignores_none_entries(self):
         out = ou.cleanup([None, ""])
         self.assertTrue(out["ok"])
+
+
+class TestPathsCli(unittest.TestCase):
+    """Subprocess tests for the path/heartbeat subcommands. The file's convention
+    is that every CLI mode gets one; these also pin the load-bearing
+    --cleanup-before---heartbeat dispatch ordering."""
+
+    def _run(self, args):
+        import subprocess
+        here = os.path.dirname(os.path.abspath(__file__))
+        script = os.path.join(here, "otsukare_usage.py")
+        return subprocess.run([sys.executable, script] + args,
+                              capture_output=True, text=True, encoding="utf-8")
+
+    def test_resolve_paths_emits_absolute_paths(self):
+        res = self._run(["--resolve-paths", "--session-id", "s1"])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = json.loads(res.stdout)
+        for key in ("heartbeat", "state", "mirror"):
+            self.assertTrue(os.path.isabs(out[key]), out[key])
+
+    def test_resolve_paths_without_session_id_errors(self):
+        res = self._run(["--resolve-paths"])
+        self.assertEqual(res.returncode, 2)
+        self.assertFalse(json.loads(res.stdout)["ok"])
+
+    def test_touch_heartbeat_creates_file(self):
+        hb = os.path.join(tempfile.mkdtemp(), "s1.heartbeat")
+        res = self._run(["--touch-heartbeat", hb])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(json.loads(res.stdout)["ok"])
+        self.assertTrue(os.path.exists(hb))
+
+    def test_heartbeat_reports_alive_for_fresh_file(self):
+        hb = os.path.join(tempfile.mkdtemp(), "s1.heartbeat")
+        self._run(["--touch-heartbeat", hb])               # create it first
+        res = self._run(["--heartbeat", hb])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(json.loads(res.stdout)["alive"])
+
+    def test_cleanup_takes_precedence_over_heartbeat_status(self):
+        # --cleanup and --heartbeat share the heartbeat path arg; dispatch order
+        # must route to cleanup (remove files), not heartbeat-status (read mtime).
+        fd1, hb = tempfile.mkstemp(suffix=".heartbeat"); os.close(fd1)
+        fd2, st = tempfile.mkstemp(suffix=".state.json"); os.close(fd2)
+        res = self._run(["--cleanup", "--heartbeat", hb, "--state", st])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = json.loads(res.stdout)
+        self.assertEqual(sorted(out["removed"]), sorted([hb, st]))
+        self.assertFalse(os.path.exists(hb))
+        self.assertFalse(os.path.exists(st))
 
 
 if __name__ == "__main__":
