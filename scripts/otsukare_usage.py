@@ -457,7 +457,9 @@ def format_summary(s):
 
 def _build_parser():
     p = argparse.ArgumentParser(description="otsukare usage-decision helper")
-    p.add_argument("--file",
+    # Path args use type=expand_user_path so a leading ~ (which PowerShell does not
+    # expand for a native exe) is resolved at parse time, co-located with each arg.
+    p.add_argument("--file", type=expand_user_path,
                    default=os.path.expanduser("~/.claude/last-statusline-input.json"))
     p.add_argument("--now", type=int, default=None, help="override current epoch (testing)")
     p.add_argument("--mtime", type=int, default=None, help="override file mtime (testing)")
@@ -477,15 +479,16 @@ def _build_parser():
                    help="print absolute otsukare state paths for --session-id")
     p.add_argument("--session-id", default=None, help="session id (for --resolve-paths)")
     p.add_argument("--task-slug", default=None, help="task slug (for --resolve-paths)")
-    p.add_argument("--touch-heartbeat", default=None, metavar="PATH",
+    p.add_argument("--touch-heartbeat", type=expand_user_path, default=None, metavar="PATH",
                    help="create/bump the heartbeat file at PATH")
-    p.add_argument("--heartbeat", default=None, metavar="PATH",
+    p.add_argument("--heartbeat", type=expand_user_path, default=None, metavar="PATH",
                    help="report alive/age for the heartbeat at PATH")
     p.add_argument("--heartbeat-stale-min", type=int, default=15,
                    help="minutes before a heartbeat is considered dead")
     p.add_argument("--cleanup", action="store_true",
                    help="remove the heartbeat (--heartbeat) and state (--state) files")
-    p.add_argument("--state", default=None, help="path to the otsukare run-state JSON")
+    p.add_argument("--state", type=expand_user_path, default=None,
+                   help="path to the otsukare run-state JSON")
     p.add_argument("--state-action", choices=["init", "pause", "resume", "summary"],
                    default=None, help="run-metrics lifecycle action on the state file")
     p.add_argument("--task", default="", help="task name (for --state-action init)")
@@ -507,12 +510,6 @@ def main(argv=None):
     except (AttributeError, ValueError):
         pass
     args = _build_parser().parse_args(argv)
-    # PowerShell does not expand a leading ~ in native-exe args, so normalize
-    # every path-valued arg here, before any dispatch reads it.
-    args.file = expand_user_path(args.file)
-    args.state = expand_user_path(args.state)
-    args.touch_heartbeat = expand_user_path(args.touch_heartbeat)
-    args.heartbeat = expand_user_path(args.heartbeat)
     now = args.now if args.now is not None else int(time.time())
     if args.resolve_paths:
         if not args.session_id:
