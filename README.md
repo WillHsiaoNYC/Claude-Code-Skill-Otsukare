@@ -67,7 +67,7 @@ python3 ~/.claude/skills/otsukare/scripts/otsukare_usage.py --cron-for 170000000
 
   a. Read `~/.claude/settings.json` (and `~/.claude/settings.local.json` if it exists) and find `"statusLine".command`.
 
-  b. **If a statusline script is configured** (e.g. `"command": "bash ~/.claude/statusline.sh"`):
+  b. **If a statusline script is configured** (e.g., on macOS/Linux, `"command": "bash ~/.claude/statusline.sh"`):
    - Resolve the script path and read it.
    - **Idempotency:** if it already contains `last-statusline-input.json`, the mirror is present — skip this step.
    - Otherwise back it up (`cp script script.bak`), then insert these lines **immediately after the line that captures stdin** (usually `input=$(cat)` — match the script's actual variable name if different):

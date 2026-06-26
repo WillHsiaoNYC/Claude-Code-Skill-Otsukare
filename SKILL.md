@@ -29,9 +29,9 @@ The helper already applies `SOFT`/`HARD`/`STALE_BUFFER`/`STALE_AGE`/`RESUME_OFFS
 
 **Resolve your tools once, reuse them below.** Different OSes expose Python under different names and PowerShell does not expand `~`, so pin these tokens before running anything else and reuse them verbatim:
 
-- `<PY>` — your Python launcher. Probe in priority order and keep the FIRST whose `--version` exits 0: `py` (the Windows launcher), then `python` with a `3` suffix, then plain `python`. Never run a bare interpreter with no script — it opens a REPL or, on Windows, hits the dead Microsoft Store stub.
+- `<PY>` — your Python launcher. Try `py` (the Windows launcher), then `python3`, then `python`; keep the FIRST whose `--version` exits 0. Never run a bare interpreter with no script — it opens a REPL or, on Windows, hits the dead Microsoft Store stub.
 - `<HELPER>` — the absolute path to `otsukare_usage.py`, i.e. `<skills-dir>/otsukare/scripts/otsukare_usage.py` with any `~` already expanded.
-- `<state>` / `<heartbeat>` / `<checkpoint>` — once Step 0 confirms otsukare applies, run `<PY> <HELPER> --resolve-paths --session-id <session_id> --task-slug <slug>` **once** and keep the returned absolute paths (the call also emits `home`, `state_dir`, and `mirror`). Take `<session_id>` from the statusline mirror blob and `<slug>` from a short kebab of the task. Use these tokens everywhere below — never write a `~/...` path by hand.
+- `<state>` / `<heartbeat>` / `<checkpoint>` — once Step 0 confirms otsukare applies, run `<PY> <HELPER> --resolve-paths --session-id <session_id> --task-slug <task-slug>` **once** and keep the returned absolute paths (the call also emits `home`, `state_dir`, and `mirror`). Take `<session_id>` from the statusline mirror blob and `<task-slug>` from a short kebab of the task. Use these tokens everywhere below — never write a `~/...` path by hand.
 
 **Step 0 — confirm otsukare even applies here.** It only guards subscription 5h/7d limits:
 ```
@@ -51,7 +51,7 @@ Once applicable, set up the dead-man's switch so a sudden usage spike that hard-
    - `timed_out: true` / `fresh: false` → the mirror isn't updating (statusline not wired, or the session is idle). **Tell the user** usage couldn't be refreshed, then proceed on the conservative path (`--arm` will return `provisional: true` and the first seam will re-point it).
 
    Never read the plain decision/`--arm` for the initial reset time without clearing this barrier first.
-2. **Write the initial checkpoint** to `<checkpoint>` (the path you resolved above). Use the template in *Pause protocol* step 3, filling Goal / cwd / branch and leaving Done/Next to be updated at each seam.
+2. **Write the initial checkpoint** to `<checkpoint>` (the path you resolved above). Use the template in *Pause protocol* step 3, filling Goal / Session ID / Task slug / cwd / branch and leaving Done/Next to be updated at each seam.
 3. **Bump the heartbeat:** `<PY> <HELPER> --touch-heartbeat <heartbeat>`
 4. **Initialize run metrics** (baselines for the end-of-task summary):
    ```
@@ -95,6 +95,8 @@ When otsukare decides to pause proactively:
    # otsukare checkpoint — <task-slug>
 
    - Goal: <original request, 1-2 sentences>
+   - Session ID: <session_id>
+   - Task slug: <task-slug>
    - Absolute cwd: <`git rev-parse --show-toplevel`; or the session's known absolute cwd if not in a git repo — absolute, forward-slash form>
    - Branch: <output of `git rev-parse --abbrev-ref HEAD`>
    - WIP SHA: <filled in step 4, after the commit>
@@ -140,7 +142,7 @@ It prints `*/5 H D M *` — every 5 min, but only during the target hour/date, s
 
 When a scheduled prompt fires (either the safety net or a proactive re-point):
 
-**First, re-pin your tools and paths.** A cron prompt starts a fresh session, so re-resolve `<PY>` and `<HELPER>` exactly as at preflight, then recover the original run's paths: the prompt carries the checkpoint's absolute path, so read the original `session_id` and `task-slug` from its filename and run `<PY> <HELPER> --resolve-paths --session-id <original_session_id> --task-slug <task-slug>` to get back `<heartbeat>` / `<state>` / `<checkpoint>`.
+**First, re-pin your tools and paths.** A cron prompt starts a fresh session, so re-resolve `<PY>` and `<HELPER>` exactly as at preflight, then recover the original run's paths: the prompt carries the checkpoint's absolute path, so open it and read its `Session ID` and `Task slug` fields, then run `<PY> <HELPER> --resolve-paths --session-id <session_id> --task-slug <task-slug>` to get back `<heartbeat>` / `<state>` / `<checkpoint>`.
 
 1. **Is the work still alive?** Check the heartbeat:
    ```
