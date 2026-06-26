@@ -40,6 +40,8 @@ Architecture: a small, unit-tested Python helper (`scripts/otsukare_usage.py`) o
 
 ## Install — With an AI agent (recommended)
 
+> **Python launcher:** in the commands below use `python3` on macOS/Linux and `py` (or `python`) on Windows.
+
 **If you are an AI coding agent installing this, follow these steps exactly.** They are deterministic; the only judgement call is editing the user's existing statusline in step 4 (do it idempotently and back it up).
 
 **1. Get the files.** Clone the repo (or use the local copy if already present):
@@ -75,11 +77,18 @@ python3 ~/.claude/skills/otsukare/scripts/otsukare_usage.py --cron-for 170000000
        && mv ~/.claude/last-statusline-input.json.tmp ~/.claude/last-statusline-input.json 2>/dev/null
      ```
    - If the script never captures stdin, add `input=$(cat)` as its first executable line, then the mirror lines above (Claude Code feeds the JSON on stdin).
+   - If the existing statusline is **PowerShell or Python** rather than bash, inject the matching snippet from [Expose your limits to your local agent](#expose-your-limits-to-your-local-agent) instead.
 
-  c. **If NO statusline is configured:** create `~/.claude/statusline.sh` with the minimal script from [Manual setup](#install--manual) below (`chmod +x` it), and merge this into `~/.claude/settings.json` **without clobbering other keys**:
-   ```json
-   { "statusLine": { "type": "command", "command": "bash ~/.claude/statusline.sh" } }
+  c. **If NO statusline is configured:** wire the bundled cross-platform **Python statusline** (`~/.claude/skills/otsukare/scripts/statusline.py`), which mirrors the blob *and* prints the status line. Bake the **absolute** interpreter path — the `sys.executable` of the Python you just installed with, so the launcher is never guessed — and quote the absolute script path. Merge into `~/.claude/settings.json` **without clobbering other keys** (see [Expose your limits to your local agent](#expose-your-limits-to-your-local-agent) for the full explanation):
+   ```jsonc
+   // Windows — absolute python.exe + absolute, quoted script path
+   { "statusLine": { "type": "command",
+     "command": "C:\\path\\to\\python.exe \"C:\\Users\\you\\.claude\\skills\\otsukare\\scripts\\statusline.py\"" } }
+   // macOS / Linux
+   { "statusLine": { "type": "command",
+     "command": "python3 ~/.claude/skills/otsukare/scripts/statusline.py" } }
    ```
+   Never wire `bash …` on Windows — it won't launch.
 
 **5. Verify the mirror works.** Ask the user to send any message in Claude Code (the statusline renders every few seconds while active), then:
 ```bash
@@ -96,17 +105,33 @@ otsukare — <your long task>
 
 ## Install — Manual
 
+> **Python launcher:** in the commands below use `python3` on macOS/Linux and `py` (or `python`) on Windows.
+
 ```bash
 git clone https://github.com/WillHsiaoNYC/Claude-Code-Skill-Otsukare.git
 cd Claude-Code-Skill-Otsukare
-./install.sh        # copies the skill into ~/.claude/skills/otsukare and runs the tests
+./install.sh        # macOS/Linux — copies the skill into ~/.claude/skills/otsukare and runs the tests
 ```
 
-Then do the **one required manual step** — mirror your usage to a file the skill can read.
+On **Windows** run the installer directly (the `.sh` is just a thin shim over it):
 
-### Add the mirror line to your existing statusline
+```powershell
+py install.py
+```
 
-In the script configured under `statusLine.command` in `~/.claude/settings.json`, right after it reads stdin, add:
+Then do the **one required manual step** — see **[Expose your limits to your local agent](#expose-your-limits-to-your-local-agent)** below.
+
+---
+
+## Expose your limits to your local agent
+
+Claude Code feeds live rate-limit data **only to your statusline's stdin** — not to the model or to a plain script. otsukare reads your usage by having the statusline **mirror that blob** to `last-statusline-input.json` in your Claude config dir (`~/.claude/last-statusline-input.json`). Wire it one of two ways.
+
+### Inject the mirror into an existing statusline
+
+In the script configured under `statusLine.command` in `~/.claude/settings.json`, right after it reads the blob from stdin, add the snippet that matches the script's language.
+
+**For an existing bash statusline:**
 
 ```bash
 input=$(cat)
@@ -116,38 +141,46 @@ printf '%s' "$input" > ~/.claude/last-statusline-input.json.tmp 2>/dev/null \
   && mv ~/.claude/last-statusline-input.json.tmp ~/.claude/last-statusline-input.json 2>/dev/null
 ```
 
-### Don't have a statusline yet?
+**For an existing PowerShell statusline:**
 
-Create `~/.claude/statusline.sh`:
+```powershell
+$blob = [Console]::In.ReadToEnd()
 
-```bash
-#!/bin/bash
-input=$(cat)
-
-# otsukare: mirror the rate-limit blob (atomic write)
-printf '%s' "$input" > ~/.claude/last-statusline-input.json.tmp 2>/dev/null \
-  && mv ~/.claude/last-statusline-input.json.tmp ~/.claude/last-statusline-input.json 2>/dev/null
-
-# minimal status line: model + 5h usage
-echo "$input" | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-model = d.get("model", {}).get("display_name", "Claude")
-five = (d.get("rate_limits", {}).get("five_hour", {}) or {}).get("used_percentage", "?")
-print(f"{model} · 5h {five}%")
-'
+# otsukare: mirror the rate-limit blob (atomic write via a temp file + move)
+$mirror = Join-Path $HOME '.claude\last-statusline-input.json'
+[IO.File]::WriteAllText("$mirror.tmp", $blob)
+Move-Item -Force "$mirror.tmp" $mirror
 ```
 
-Then wire it in `~/.claude/settings.json`:
+**For an existing Python statusline** (this is exactly what the bundled `statusline.py` does):
 
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "bash ~/.claude/statusline.sh"
-  }
-}
+```python
+import json, os, sys
+raw = sys.stdin.read()
+
+# otsukare: mirror the rate-limit blob (atomic write via os.replace)
+dest = os.path.join(os.path.expanduser("~"), ".claude", "last-statusline-input.json")
+tmp = dest + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    f.write(raw)
+os.replace(tmp, dest)
 ```
+
+### No statusline yet? Use the bundled Python statusline
+
+The repo ships a cross-platform `statusline.py` that mirrors the blob **and** prints a minimal `model · 5h NN%` line — no shell required. Install copied it to `~/.claude/skills/otsukare/scripts/statusline.py`. Wire it with an **absolute interpreter** and an **absolute, quoted** script path — show the form for your OS:
+
+```jsonc
+// Windows — use the absolute python.exe that ran install.py
+{ "statusLine": { "type": "command",
+  "command": "C:\\path\\to\\python.exe \"C:\\Users\\you\\.claude\\skills\\otsukare\\scripts\\statusline.py\"" } }
+
+// macOS / Linux
+{ "statusLine": { "type": "command",
+  "command": "python3 ~/.claude/skills/otsukare/scripts/statusline.py" } }
+```
+
+Merge that into `~/.claude/settings.json` without clobbering other keys. The AI-agent install bakes the interpreter's `sys.executable` into the Windows command, so the path is never guessed. **Never wire `bash …` as the Windows command** — it won't launch.
 
 Restart Claude Code afterward so it discovers the skill.
 
@@ -155,7 +188,7 @@ Restart Claude Code afterward so it discovers the skill.
 
 ## Why the statusline step?
 
-Claude Code provides live rate-limit data **only to your statusline script's stdin** — it is not available to the model or to a plain script. Mirroring that blob to `~/.claude/last-statusline-input.json` is what lets otsukare's helper read your current 5h/7d usage and reset times.
+That mirror file is the *only* way otsukare can see your usage: Claude Code surfaces live rate-limit data to the statusline and nowhere else, so without the mirror the helper has nothing to read. The wiring lives in [Expose your limits to your local agent](#expose-your-limits-to-your-local-agent).
 
 > The mirrored blob must contain a `rate_limits` object with `five_hour` / `seven_day` (each with `used_percentage` and `resets_at`). Claude Code provides these to the statusline; if your plan or version doesn't surface them, otsukare can't see your limits.
 
@@ -170,7 +203,8 @@ otsukare — then <your long task here>
 otsukare arms the safety net, runs your task, and handles the limits transparently. When it pauses, it tells you exactly where it stopped and when it will resume. You can also use the helper standalone:
 
 ```bash
-python3 ~/.claude/skills/otsukare/scripts/otsukare_usage.py | python3 -m json.tool
+# prints a JSON decision for the current usage (macOS/Linux shown; use `py` on Windows)
+python3 ~/.claude/skills/otsukare/scripts/otsukare_usage.py
 ```
 
 ## Configuration
