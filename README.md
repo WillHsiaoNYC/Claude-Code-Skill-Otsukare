@@ -50,17 +50,17 @@ git clone https://github.com/WillHsiaoNYC/Claude-Code-Skill-Otsukare.git
 cd Claude-Code-Skill-Otsukare
 ```
 
-**2. Install the skill** into the Claude Code user skills directory:
+**2. Install the skill** — run the cross-platform installer, which copies `SKILL.md` + `scripts/` into `~/.claude/skills/otsukare` and runs the helper tests:
 ```bash
-mkdir -p ~/.claude/skills/otsukare
-cp -R SKILL.md scripts ~/.claude/skills/otsukare/
-chmod +x ~/.claude/skills/otsukare/scripts/otsukare_usage.py
+python3 install.py     # macOS/Linux
+py install.py          # Windows
 ```
+Expect the install path followed by `OK` from the test run.
 
-**3. Verify the helper** runs and its tests pass:
+**3. Verify the helper** (the installer already ran the unit tests — this is an extra smoke check). `cd` into the installed scripts dir first so the script path stays relative (no `~` for the interpreter to choke on):
 ```bash
-python3 ~/.claude/skills/otsukare/scripts/otsukare_usage.py --cron-for 1700000000   # prints a cron string
-( cd ~/.claude/skills/otsukare/scripts && python3 -m unittest test_otsukare_usage ) # all tests OK
+cd ~/.claude/skills/otsukare/scripts
+python3 otsukare_usage.py --cron-for 1700000000   # prints a cron string
 ```
 
 **4. Wire the rate-limit mirror (REQUIRED — otsukare is blind without it).** Claude Code pipes live rate-limit data *only* to the statusline script's stdin, so the statusline must mirror that blob to `~/.claude/last-statusline-input.json`.
@@ -90,9 +90,10 @@ python3 ~/.claude/skills/otsukare/scripts/otsukare_usage.py --cron-for 170000000
    ```
    Never wire `bash …` on Windows — it won't launch.
 
-**5. Verify the mirror works.** Ask the user to send any message in Claude Code (the statusline renders every few seconds while active), then:
+**5. Verify the mirror works.** Ask the user to send any message in Claude Code (the statusline renders every few seconds while active), then (`cd` first so no `~` reaches the interpreter):
 ```bash
-python3 ~/.claude/skills/otsukare/scripts/otsukare_usage.py
+cd ~/.claude/skills/otsukare/scripts
+python3 otsukare_usage.py
 ```
 Expect JSON with `"ok": true` and real `five_hour` / `seven_day` values. If `"ok": false` or the values are missing, the mirror isn't writing yet — re-check step 4.
 
@@ -203,8 +204,9 @@ otsukare — then <your long task here>
 otsukare arms the safety net, runs your task, and handles the limits transparently. When it pauses, it tells you exactly where it stopped and when it will resume. You can also use the helper standalone:
 
 ```bash
-# prints a JSON decision for the current usage (macOS/Linux shown; use `py` on Windows)
-python3 ~/.claude/skills/otsukare/scripts/otsukare_usage.py
+# prints a JSON decision for the current usage (use `py` on Windows)
+cd ~/.claude/skills/otsukare/scripts
+python3 otsukare_usage.py
 ```
 
 ## Configuration
