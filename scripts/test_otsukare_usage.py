@@ -54,8 +54,10 @@ class TestDecide(unittest.TestCase):
         self.assertEqual(out["decision"], "hard")
 
     def test_stale_buffer_pushes_into_soft(self):
-        # used 85, fresh -> continue; stale -> effective 93 -> soft
-        p = write_blob(five=85, five_reset=1000, seven=5, seven_reset=9000)
+        # used 85, fresh -> continue; stale -> effective 93 -> soft. The reset
+        # stays in the future for both reads, so this exercises the stale buffer
+        # on a still-valid window (a rolled-over window is covered separately).
+        p = write_blob(five=85, five_reset=10_000, seven=5, seven_reset=90_000)
         fresh = ou.decide(p, now=500, mtime=490, cfg=CFG)      # age 10s
         stale = ou.decide(p, now=1000, mtime=500, cfg=CFG)     # age 500s > 120
         self.assertEqual(fresh["decision"], "continue")
@@ -79,6 +81,46 @@ class TestDecide(unittest.TestCase):
         p = write_blob(five=50, five_reset=1000)
         out = ou.decide(p, now=777, mtime=770, cfg=CFG)
         self.assertEqual(out["now"], 777)
+
+    def test_rolled_window_does_not_pause(self):
+        # The mirror still holds the PRIOR window's blob: 97% used, but its reset
+        # is now in the past -> the 5h window rolled over and usage reset to ~0.
+        # decide() must NOT pause on the stale 97% (this was the false-pause bug).
+        p = write_blob(five=97, five_reset=1_000_000, seven=40, seven_reset=2_000_000)
+        out = ou.decide(p, now=1_000_060, mtime=999_000, cfg=CFG)  # 60s after reset
+        self.assertEqual(out["decision"], "continue")
+        self.assertIsNone(out["binding_resets_at"])
+        self.assertIsNone(out["resume_target"])
+
+    def test_rolled_window_is_flagged_for_refresh(self):
+        p = write_blob(five=97, five_reset=1_000_000, seven=40, seven_reset=2_000_000)
+        out = ou.decide(p, now=1_000_060, mtime=999_000, cfg=CFG)
+        self.assertTrue(out["stale_window"])
+        self.assertTrue(out["limits"]["five_hour"]["rolled"])
+        self.assertEqual(out["limits"]["five_hour"]["effective"], 0)
+
+    def test_rolled_window_skips_stale_buffer(self):
+        # 95% + 8 stale buffer = 103 (hard) if treated as live; rolled -> continue.
+        # The buffer must never be added to a window that already reset.
+        p = write_blob(five=95, five_reset=1000)
+        out = ou.decide(p, now=2000, mtime=1500, cfg=CFG)  # stale file AND past reset
+        self.assertEqual(out["decision"], "continue")
+        self.assertTrue(out["limits"]["five_hour"]["rolled"])
+
+    def test_live_window_still_pauses_when_other_rolled(self):
+        # 7d window rolled (stale 99%), but 5h is genuinely at 95 with a future
+        # reset -> still soft on 5h. A rolled sibling must not blind the live one.
+        p = write_blob(five=95, five_reset=10_000, seven=99, seven_reset=1000)
+        out = ou.decide(p, now=2000, mtime=1990, cfg=CFG)
+        self.assertEqual(out["decision"], "soft")
+        self.assertEqual(out["binding_resets_at"], 10_000)
+        self.assertTrue(out["stale_window"])
+        self.assertTrue(out["limits"]["seven_day"]["rolled"])
+
+    def test_no_rolled_window_reports_stale_window_false(self):
+        p = write_blob(five=50, five_reset=10_000, seven=5, seven_reset=90_000)
+        out = ou.decide(p, now=500, mtime=490, cfg=CFG)
+        self.assertFalse(out["stale_window"])
 
 
 class TestArmTarget(unittest.TestCase):

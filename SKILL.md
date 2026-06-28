@@ -75,14 +75,20 @@ Do the wrapped work in steps. After each **natural seam** — a foreground subag
    ```
    <PY> <HELPER>
    ```
-   It prints JSON: `{"decision": "...", "now": epoch, "stale": bool, "limits": {...}, "binding_resets_at": epoch|null, "resume_target": epoch|null}`.
-4. **Re-point the safety net if the 5h window rolled.** If `limits.five_hour.resets_at` is later than the currently-armed target minus the offset (or the armed target was provisional), `CronDelete` the old job and re-arm via `--arm` so the net always points at the next reset. Update the job ID in the checkpoint.
-5. **Act on `decision`:**
+   It prints JSON: `{"decision": "...", "now": epoch, "stale": bool, "stale_window": bool, "limits": {...}, "binding_resets_at": epoch|null, "resume_target": epoch|null}`.
+4. **If `stale_window` is `true`, the reading is from an already-reset window — refresh before trusting it.** A `resets_at` at or before `now` means the mirror still holds a *previous* window's blob (its usage % is pre-reset and no longer applies), so the helper has flagged that limit `rolled` and ignored its percentage. This is exactly the "it paused at 97% right after the limit reset" failure. Block for a fresh render and re-read, then act on the refreshed decision:
+   ```
+   <PY> <HELPER> --wait-fresh
+   <PY> <HELPER>
+   ```
+   If `--wait-fresh` still times out (`fresh: false`), the statusline isn't updating — **do not pause on the stale numbers**; keep working and re-check at the next seam.
+5. **Re-point the safety net if the 5h window rolled.** If `limits.five_hour.resets_at` is later than the currently-armed target minus the offset (or the armed target was provisional), `CronDelete` the old job and re-arm via `--arm` so the net always points at the next reset. Update the job ID in the checkpoint.
+6. **Act on `decision`:**
    - `continue` → keep working.
    - `soft` → if the remaining work is **near a finish line** (last step, or one more small foreground batch), push through to finish — but re-check at every seam and **never** cross `hard`. If **substantial work remains**, run the **Pause protocol**.
    - `hard` → run the **Pause protocol** at this seam, no exceptions.
 
-If `stale` is `true`, the helper has already added `STALE_BUFFER` to the effective usage (it rounds against you). Trust the decision.
+If `stale` is `true` (file is old but the window is still current), the helper has already added `STALE_BUFFER` to the effective usage (it rounds against you). Trust the decision. `stale_window` is the *different* case above — an expired window whose percentage is discarded, not buffered.
 
 ## Pause protocol
 
@@ -194,7 +200,7 @@ A run that never hits a limit thus creates the safety-net job at start and delet
 
 ## Notes & guards
 
-- The data file updates only when the statusline renders; in practice that is every few seconds while the session is active. The **`--wait-fresh` barrier** at start and resume blocks until a render lands with a current 5h window, so the initial reset time is never read from a stale file. Mid-run seam reads are fine as-is (an active session renders constantly); the stale buffer covers any idle gap.
+- The data file updates only when the statusline renders; in practice that is every few seconds while the session is active. The **`--wait-fresh` barrier** at start and resume blocks until a render lands with a current 5h window, so the initial reset time is never read from a stale file. For mid-run seam reads, the helper guards itself: usage within a window only rises, so an *old-but-current-window* file (`stale: true`) is handled by the stale buffer, while an *expired-window* file (`stale_window: true`, `resets_at` ≤ now) has its pre-reset percentage discarded rather than buffered — so a read taken right after a reset can never force a false pause. When `stale_window` is true, refresh via `--wait-fresh` and re-read to get the new window's real usage.
 - Usage is **account-global** — it reflects whichever session rendered last. That is why resume mode requires the file to be fresher than the reset before trusting "cleared."
 - If both 5h and 7d are over threshold, the helper binds to the **later** reset (you must wait for both).
 - The **safety net** is the failsafe for a sudden swarm-to-100% that hard-cuts the session before a seam: it is armed up front, so a resume is scheduled even if the pause protocol never runs. The **heartbeat** ensures it only takes over when the main run is actually dead, never duplicating a live session.
