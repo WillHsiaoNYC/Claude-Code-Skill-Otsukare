@@ -98,6 +98,14 @@ def _limit(blob, key):
     return rl.get("used_percentage"), rl.get("resets_at")
 
 
+def _reset_in_future(resets, now):
+    """True when a limit's reset epoch is known and still ahead of `now` — its
+    window is current. A reset at-or-before `now` means the window already rolled
+    over, so that limit's cached percentage is the prior window's and is stale.
+    Single source of truth for this boundary across decide/arm_target/_is_fresh."""
+    return resets is not None and resets > now
+
+
 def decide(path, now, mtime, cfg):
     blob = load_blob(path)
     age = now - mtime
@@ -107,13 +115,26 @@ def decide(path, now, mtime, cfg):
            "mtime": mtime, "limits": {}}
     over_resets = []
     decision = "continue"
+    rolled_any = False
     for key in LIMIT_KEYS:
         used, resets = _limit(blob, key)
         if used is None:
             out["limits"][key] = None
             continue
+        # A reset epoch at-or-before now means this window already rolled over:
+        # the cached `used` is the PRIOR window's final value, not the current
+        # one. Usage reset (dropped to ~0), so this percentage must NOT drive a
+        # pause and the stale buffer must NOT be added to it (that turned a stale
+        # 97% into 105% and forced a false hard-pause right after a reset). Flag
+        # it instead; the caller should refresh before trusting usage again.
+        if resets is not None and not _reset_in_future(resets, now):
+            rolled_any = True
+            out["limits"][key] = {"used": used, "effective": 0,
+                                  "resets_at": resets, "rolled": True}
+            continue
         eff = used + buf
-        out["limits"][key] = {"used": used, "effective": eff, "resets_at": resets}
+        out["limits"][key] = {"used": used, "effective": eff, "resets_at": resets,
+                              "rolled": False}
         if eff >= cfg["hard"]:
             decision = "hard"
         elif eff >= cfg["soft"] and decision != "hard":
@@ -121,6 +142,7 @@ def decide(path, now, mtime, cfg):
         if eff >= cfg["soft"] and resets is not None:
             over_resets.append(resets)
     out["decision"] = decision
+    out["stale_window"] = rolled_any
     if over_resets:
         binding = max(over_resets)  # must wait for the LATEST reset
         out["binding_resets_at"] = binding
@@ -139,7 +161,7 @@ def arm_target(path, now, mtime, cfg):
     caller knows to re-point it at the first seam once a fresh render lands."""
     blob = load_blob(path)
     _used, resets = _limit(blob, "five_hour")
-    if resets is not None and resets > now:
+    if _reset_in_future(resets, now):
         target = resets + cfg["resume_offset_min"] * 60
         provisional = False
     else:
@@ -211,7 +233,7 @@ def _is_fresh(mtime, start_mtime, resets_at, now, max_age=15):
     future-reset guard is what rejects a stale file from an expired window."""
     rendered_since = mtime > start_mtime
     already_recent = (now - mtime) <= max_age
-    valid_window = resets_at is not None and resets_at > now
+    valid_window = _reset_in_future(resets_at, now)
     return (rendered_since or already_recent) and valid_window
 
 
